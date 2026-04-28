@@ -167,6 +167,25 @@ def _add_number(doc, text, num):
     _set_run_font(run, 11)
 
 
+def _starts_with_emoji(text: str) -> bool:
+    if not text:
+        return False
+    code = ord(text[0])
+    return (
+        0x1F000 <= code <= 0x1FFFF
+        or 0x2600 <= code <= 0x27BF
+        or 0x2300 <= code <= 0x23FF
+        or 0x25A0 <= code <= 0x25FF
+        or 0x2B00 <= code <= 0x2BFF
+    )
+
+
+def _is_emoji_heading(text: str) -> bool:
+    if not _starts_with_emoji(text) or len(text) > 60:
+        return False
+    return not text.endswith((".", "!", "?", "요", "다", ":"))
+
+
 def _add_blank(doc):
     p = doc.add_paragraph()
     _set_paragraph_spacing(p, line=1.0, after=0)
@@ -273,6 +292,9 @@ def render_to_docx(title: str, body_md: str, output_path: Path):
         elif stripped.startswith("* ") or stripped.startswith("- "):
             flush_bq()
             _add_bullet(doc, stripped[2:].strip())
+        elif _is_emoji_heading(stripped):
+            flush_bq()
+            _add_h3(doc, stripped)
         else:
             flush_bq()
             _add_paragraph(doc, stripped)
