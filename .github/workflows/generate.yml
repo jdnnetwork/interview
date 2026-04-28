@@ -1,0 +1,39 @@
+name: Generate interview lecture
+
+on:
+  schedule:
+    # 매주 월/화/수 09:00 KST = 00:00 UTC
+    - cron: "0 0 * * 1,2,3"
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Generate docx
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/generate.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add outputs/
+          if git diff --cached --quiet; then
+            echo "no new outputs to commit"
+            exit 0
+          fi
+          git commit -m "auto: generate lecture docx ($(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST'))"
+          git push
