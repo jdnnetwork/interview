@@ -2,9 +2,11 @@
 
 흐름:
 - inputs/input.md (주제 + 주문 사항) 와 SKILL.md (시스템 규칙) 읽음
-- Anthropic Claude API (claude-opus-4-7, adaptive thinking) 호출하여 본편 마크다운 생성
-- python-docx 로 docx 렌더링
-- outputs/YYYY-MM-DD_<제목>.docx 저장 (KST 기준 날짜)
+- Anthropic Claude API (claude-opus-4-7, adaptive thinking) 2회 호출
+  - 1차: 1편 본편 마크다운 + SHORT_TITLE
+  - 2차: 1편 본문을 컨텍스트로 넣어 2편 본편 작성 (이어지는 심화 내용)
+- python-docx 로 각각 docx 렌더링
+- outputs/YYYY-MM-DD_<제목>_1편.docx, ..._2편.docx 저장 (KST 기준 날짜)
 """
 
 from __future__ import annotations
@@ -34,23 +36,65 @@ FONT_EN = "Arial"
 MODEL = "claude-opus-4-7"
 MAX_TOKENS = 32000
 
-USER_FORMAT_SUFFIX = """
+USER_FORMAT_SUFFIX_PART1 = """
 
 ---
 
 [출력 형식 - 반드시 지킬 것]
 
+이번 강의는 "1편 + 2편" 시리즈로 작성합니다. 지금은 **1편**을 작성합니다.
+
 첫 번째 줄: SHORT_TITLE: <4~10자 짧은 한국어 제목 (파일명용, 예: 관심사업, 자기소개, 직무역량)>
 두 번째 줄: ---
-이후: SKILL.md 의 모든 규칙을 따른 강의 본편 마크다운만 작성. 다른 설명/메타텍스트/code fence 금지.
-시작 고정 문구와 끝 고정 문구를 반드시 포함하시기 바랍니다.
+이후: SKILL.md 의 모든 규칙을 따른 강의 1편 본편 마크다운만 작성. 다른 설명/메타텍스트/code fence 금지.
+시작 고정 문구와 끝 고정 문구를 반드시 포함 (1편은 독립된 docx 파일).
+
+[분량 및 구성 가이드]
+- 1편 분량은 충분히 길게 (한국어 약 8,000자 이상, 가능하면 10,000자 내외)
+- 도입 ~ 핵심 개념 ~ 기본 예시까지 다루고, 더 심화된 사례/실전 응용은 2편으로 자연스럽게 넘기는 흐름으로 마무리
+"""
+
+USER_FORMAT_SUFFIX_PART2 = """
+
+---
+
+[지시사항]
+
+위는 방금 작성한 같은 주제의 "1편" 본편입니다. 지금은 **2편**을 작성합니다.
+
+요건:
+- 1편의 흐름과 자연스럽게 연결되도록 후속 내용으로 작성
+- 1편에서 이미 다룬 내용은 반복 금지. 더 심화 / 구체적 / 실전 예시 / 사례 분석 / 응용 위주
+- SKILL.md 모든 규칙 그대로 적용
+- 2편도 독립된 docx 파일이므로 시작 고정 문구와 끝 고정 문구 모두 포함
+- 2편 분량도 충분히 길게 (한국어 약 8,000자 이상, 가능하면 10,000자 내외)
+
+[출력 형식 - 반드시 지킬 것]
+
+SHORT_TITLE 라인 없이 바로 본편 시작.
+SKILL.md 규칙대로 강의 2편 본편 마크다운만. 다른 설명/메타텍스트/code fence 금지.
 """
 
 
 # ===== Claude API =====
 
-def call_claude(skill_md: str, input_md: str) -> str:
+def call_claude(skill_md: str, input_md: str, prior_part: str | None = None) -> str:
+    """prior_part=None 이면 1편 호출, 주어지면 그 본편을 컨텍스트로 2편 호출."""
     client = anthropic.Anthropic()
+
+    if prior_part is None:
+        user_content = input_md.strip() + USER_FORMAT_SUFFIX_PART1
+        label = "part1"
+    else:
+        user_content = (
+            "[원본 주제 및 주문 사항]\n\n"
+            + input_md.strip()
+            + "\n\n---\n\n[방금 작성한 1편 본편]\n\n"
+            + prior_part
+            + USER_FORMAT_SUFFIX_PART2
+        )
+        label = "part2"
+
     chunks: list[str] = []
     with client.messages.stream(
         model=MODEL,
@@ -67,7 +111,7 @@ def call_claude(skill_md: str, input_md: str) -> str:
         messages=[
             {
                 "role": "user",
-                "content": input_md.strip() + USER_FORMAT_SUFFIX,
+                "content": user_content,
             }
         ],
     ) as stream:
@@ -75,7 +119,7 @@ def call_claude(skill_md: str, input_md: str) -> str:
             chunks.append(text)
         final = stream.get_final_message()
     print(
-        f"usage: input={final.usage.input_tokens}, "
+        f"usage[{label}]: input={final.usage.input_tokens}, "
         f"output={final.usage.output_tokens}, "
         f"cache_read={final.usage.cache_read_input_tokens}, "
         f"cache_create={final.usage.cache_creation_input_tokens}",
@@ -323,19 +367,35 @@ def main():
         print("ERROR: input.md is empty", file=sys.stderr)
         sys.exit(1)
 
-    print("calling Claude API...", file=sys.stderr)
-    response_text = call_claude(skill_md, input_md)
-    title, body = parse_response(response_text)
-    print(f"title: {title}", file=sys.stderr)
-    print(f"body length: {len(body)} chars", file=sys.stderr)
-
     OUTPUT_DIR.mkdir(exist_ok=True)
     today = datetime.now(KST).strftime("%Y-%m-%d")
-    filename = f"{today}_{slugify_kr(title)}.docx"
-    output_path = OUTPUT_DIR / filename
-    render_to_docx(title, body, output_path)
-    print(f"saved: {output_path}", file=sys.stderr)
-    print(output_path.relative_to(ROOT).as_posix())
+
+    print("calling Claude API (1편)...", file=sys.stderr)
+    part1_response = call_claude(skill_md, input_md)
+    title, part1_body = parse_response(part1_response)
+    print(f"title: {title}", file=sys.stderr)
+    print(f"part1 body length: {len(part1_body)} chars", file=sys.stderr)
+
+    slug = slugify_kr(title)
+    part1_path = OUTPUT_DIR / f"{today}_{slug}_1편.docx"
+    render_to_docx(f"{title} (1편)", part1_body, part1_path)
+    print(f"saved: {part1_path}", file=sys.stderr)
+
+    print("calling Claude API (2편)...", file=sys.stderr)
+    part2_response = call_claude(skill_md, input_md, prior_part=part1_body)
+    # 2편은 SHORT_TITLE 없이 바로 본편이지만, 모델이 혹시 넣었으면 떼어냄
+    if part2_response.strip().startswith("SHORT_TITLE"):
+        _, part2_body = parse_response(part2_response)
+    else:
+        part2_body = part2_response.strip()
+    print(f"part2 body length: {len(part2_body)} chars", file=sys.stderr)
+
+    part2_path = OUTPUT_DIR / f"{today}_{slug}_2편.docx"
+    render_to_docx(f"{title} (2편)", part2_body, part2_path)
+    print(f"saved: {part2_path}", file=sys.stderr)
+
+    print(part1_path.relative_to(ROOT).as_posix())
+    print(part2_path.relative_to(ROOT).as_posix())
 
 
 if __name__ == "__main__":

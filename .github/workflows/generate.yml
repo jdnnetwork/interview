@@ -2,8 +2,9 @@ name: Generate interview lecture
 
 on:
   schedule:
-    # 매주 월/화/수 09:00 KST = 00:00 UTC
-    - cron: "0 0 * * 1,2,3"
+    # 매주 월/화/수 08:30 KST = 일/월/화 23:30 UTC
+    # 정시(00분) UTC 는 전 세계 cron 적체로 지연이 1~2시간씩 발생 → 30분 오프셋 + 30분 여유
+    - cron: "30 23 * * 0,1,2"
   workflow_dispatch:
 
 jobs:
